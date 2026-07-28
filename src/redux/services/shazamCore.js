@@ -28,7 +28,7 @@ const normalizeRss = (res) =>
     const img = e["im:image"]?.[e["im:image"].length - 1]?.label;
     const audio = e.link?.find((l) => l.attributes?.type === "audio/x-m4a");
     const artistHref = e["im:artist"]?.attributes?.href || "";
-    const artistId = artistHref.match(/id(\d+)/)?.[1] || "";
+    const artistId = artistHref.match(/\/(\d+)(?:\?|$)/)?.[1] || "";
 
     return {
       key: e.id?.attributes?.["im:id"] || "",
