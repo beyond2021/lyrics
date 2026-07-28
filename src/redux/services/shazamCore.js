@@ -1,77 +1,82 @@
-// shazamCore.js
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
+
+// iTunes Search API returns a different shape than Shazam Core did.
+// We normalize it here so the existing components keep working unchanged.
+const normalize = (r) => ({
+  key: String(r.trackId),
+  title: r.trackName,
+  subtitle: r.artistName,
+  images: {
+    coverart: r.artworkUrl100?.replace("100x100", "500x500"),
+    background: r.artworkUrl100?.replace("100x100", "500x500"),
+  },
+  artists: [{ adamid: String(r.artistId) }],
+  hub: { actions: [null, { uri: r.previewUrl }] },
+  genres: { primary: r.primaryGenreName },
+  url: r.trackViewUrl,
+});
+
+const normalizeList = (res) =>
+  (res?.results || []).filter((r) => r.kind === "song").map(normalize);
 
 export const shazamCoreApi = createApi({
-  reducerPath: 'shazamCoreApi',
-  baseQuery: fetchBaseQuery({
-    baseUrl: 'https://shazam-core.p.rapidapi.com/v1',
-    prepareHeaders: (headers) => {
-      headers.set('X-RapidAPI-Key', process.env.REACT_APP_RAPID_API_KEY || 'YOUR_API_KEY');
-      headers.set('X-RapidAPI-Host', 'shazam-core.p.rapidapi.com');
-      return headers;
-    },
-  }),
+  reducerPath: "shazamCoreApi",
+  // '/itunes/' is proxied to https://itunes.apple.com
+  //   - dev:  server.proxy in vite.config.js
+  //   - prod: [[redirects]] in netlify.toml
+  // Direct browser calls to itunes.apple.com get redirected to a musics://
+  // URL scheme that browsers can't follow, so the proxy is required.
+  baseQuery: fetchBaseQuery({ baseUrl: "/itunes/" }),
   endpoints: (builder) => ({
-    // 1. Track Recognition (POST – uses FormData)
-    recognizeTrack: builder.mutation({
-      query: (audioFile) => {
-        const formData = new FormData();
-        formData.append('file', audioFile);
-        return {
-          url: '/tracks/recognize',
-          method: 'POST',
-          body: formData,
-        };
-      },
+    getTopCharts: builder.query({
+      query: () => "search?term=top+hits&media=music&entity=song&limit=25",
+      transformResponse: normalizeList,
     }),
 
-    // 2. Multi Search (GET)
-    multiSearch: builder.query({
-      query: ({ search_type = 'SONGS', query, offset = 0 }) =>
-        `/search/multi?search_type=${search_type}&query=${encodeURIComponent(query)}&offset=${offset}`,
+    getSongsByGenre: builder.query({
+      query: (genre) =>
+        `search?term=${encodeURIComponent(genre || "pop")}&media=music&entity=song&limit=25`,
+      transformResponse: normalizeList,
     }),
 
-    // 3. Track Details v1 (GET)
-    getTrackDetailsV1: builder.query({
-      query: ({ track_id }) => `/tracks/details?track_id=${track_id}`,
+    getSongsByCountry: builder.query({
+      query: (countryCode) =>
+        `search?term=music&country=${countryCode || "US"}&media=music&entity=song&limit=25`,
+      transformResponse: normalizeList,
     }),
 
-    // 4. Track Details v2 (GET)
-    getTrackDetailsV2: builder.query({
-      query: ({ track_id }) => `/v2/tracks/details?track_id=${track_id}`,
+    getSongsBySearch: builder.query({
+      query: (searchTerm) =>
+        `search?term=${encodeURIComponent(searchTerm)}&media=music&entity=song&limit=25`,
+      transformResponse: normalizeList,
     }),
 
-    // 5. Related Tracks (GET)
-    getRelatedTracks: builder.query({
-      query: ({ track_id, offset = 0 }) =>
-        `/tracks/related?track_id=${track_id}&offset=${offset}`,
+    getSongDetails: builder.query({
+      query: ({ songid }) => `lookup?id=${songid}`,
+      transformResponse: (res) => normalizeList(res)[0] || null,
     }),
 
-    // 6. Similar Tracks (GET)
-    getSimilarTracks: builder.query({
-      query: ({ track_id }) => `/tracks/similarities?track_id=${track_id}`,
+    getSongRelated: builder.query({
+      query: ({ songid }) => `lookup?id=${songid}&entity=song&limit=15`,
+      transformResponse: normalizeList,
     }),
 
-    // 7. Total Shazams (GET)
-    getTotalShazams: builder.query({
-      query: ({ track_id }) => `/tracks/total-shazams?track_id=${track_id}`,
-    }),
-
-    // 8. YouTube Video (GET)
-    getYoutubeVideo: builder.query({
-      query: ({ track_id, name }) =>
-        `/tracks/youtube-video?track_id=${track_id}&name=${encodeURIComponent(name)}`,
+    getArtistDetails: builder.query({
+      query: (artistId) => `lookup?id=${artistId}&entity=song&limit=25`,
+      transformResponse: (res) => ({
+        artist: res?.results?.[0] || null,
+        songs: normalizeList(res),
+      }),
     }),
   }),
 });
 
 export const {
-  useRecognizeTrackMutation,
-  useMultiSearchQuery,
-  useGetTrackDetailsV1Query,
-  useGetTrackDetailsV2Query,
-  useGetRelatedTracksQuery,
-  useGetSimilarTracksQuery,
-  useGetTotalShazamsQuery,
-  useGetYoutubeVideoQuery,
+  useGetTopChartsQuery,
+  useGetSongsByGenreQuery,
+  useGetSongDetailsQuery,
+  useGetSongRelatedQuery,
+  useGetArtistDetailsQuery,
+  useGetSongsByCountryQuery,
+  useGetSongsBySearchQuery,
 } = shazamCoreApi;
