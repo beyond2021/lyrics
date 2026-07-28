@@ -1,47 +1,72 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 // iTunes returns a different shape than Shazam Core did.
-// We normalize both of its APIs into one shape so components stay unchanged.
+// We normalize all of its APIs into one shape so components stay unchanged.
+//
+// Each song carries BOTH shapes the template reads from:
+//   - images.coverart / hub.actions[1].uri  -> used on most pages
+//   - attributes.artwork.url / attributes.previews[0].url
+//       -> SongBar branches to this shape when artistId is present,
+//          because Shazam's artist endpoint returned Apple Music objects.
 
-// --- Search API (/search, /lookup) ---
-const normalize = (r) => ({
-  key: String(r.trackId),
-  title: r.trackName,
-  subtitle: r.artistName,
-  images: {
-    coverart: r.artworkUrl100?.replace("100x100", "500x500"),
-    background: r.artworkUrl100?.replace("100x100", "500x500"),
-  },
-  artists: [{ adamid: String(r.artistId) }],
-  hub: { actions: [null, { uri: r.previewUrl }] },
-  genres: { primary: r.primaryGenreName },
-  url: r.trackViewUrl,
+const appleAttrs = (name, artistName, artworkUrl, previewUrl) => ({
+  name,
+  artistName,
+  artwork: { url: artworkUrl },
+  previews: [{ url: previewUrl }],
 });
 
+// --- Search API (/search, /lookup) ---
+const normalize = (r) => {
+  const art = r.artworkUrl100?.replace("100x100", "500x500");
+  return {
+    key: String(r.trackId),
+    title: r.trackName,
+    subtitle: r.artistName,
+    images: { coverart: art, background: art },
+    artists: [{ adamid: String(r.artistId) }],
+    hub: { actions: [null, { uri: r.previewUrl }] },
+    genres: { primary: r.primaryGenreName },
+    url: r.trackViewUrl,
+    attributes: appleAttrs(r.trackName, r.artistName, art, r.previewUrl),
+  };
+};
+
+// /search results carry kind: 'song'
 const normalizeList = (res) =>
   (res?.results || []).filter((r) => r.kind === "song").map(normalize);
+
+// /lookup results carry wrapperType: 'track'; the artist row has no trackId
+const normalizeLookup = (res) =>
+  (res?.results || [])
+    .filter(
+      (r) => (r.wrapperType === "track" || r.kind === "song") && r.trackId,
+    )
+    .map(normalize);
 
 // --- RSS charts feed (/{country}/rss/topsongs/...) ---
 // Completely different shape: feed.entry[] with im:-prefixed keys.
 const normalizeRss = (res) =>
   (res?.feed?.entry || []).map((e) => {
-    const img = e["im:image"]?.[e["im:image"].length - 1]?.label;
+    const raw = e["im:image"]?.[e["im:image"].length - 1]?.label;
+    const art = raw?.replace(/\d+x\d+bb/, "500x500bb");
     const audio = e.link?.find((l) => l.attributes?.type === "audio/x-m4a");
+    const preview = audio?.attributes?.href;
     const artistHref = e["im:artist"]?.attributes?.href || "";
     const artistId = artistHref.match(/\/(\d+)(?:\?|$)/)?.[1] || "";
+    const title = e["im:name"]?.label;
+    const artist = e["im:artist"]?.label;
 
     return {
       key: e.id?.attributes?.["im:id"] || "",
-      title: e["im:name"]?.label,
-      subtitle: e["im:artist"]?.label,
-      images: {
-        coverart: img?.replace(/\d+x\d+bb/, "500x500bb"),
-        background: img?.replace(/\d+x\d+bb/, "500x500bb"),
-      },
+      title,
+      subtitle: artist,
+      images: { coverart: art, background: art },
       artists: [{ adamid: artistId }],
-      hub: { actions: [null, { uri: audio?.attributes?.href }] },
+      hub: { actions: [null, { uri: preview }] },
       genres: { primary: e.category?.attributes?.label },
       url: e.id?.label,
+      attributes: appleAttrs(title, artist, art, preview),
     };
   });
 
@@ -81,20 +106,36 @@ export const shazamCoreApi = createApi({
 
     getSongDetails: builder.query({
       query: ({ songid }) => `lookup?id=${songid}`,
-      transformResponse: (res) => normalizeList(res)[0] || null,
+      transformResponse: (res) => normalizeLookup(res)[0] || null,
     }),
 
     getSongRelated: builder.query({
       query: ({ songid }) => `lookup?id=${songid}&entity=song&limit=15`,
-      transformResponse: normalizeList,
+      transformResponse: normalizeLookup,
     }),
 
     getArtistDetails: builder.query({
       query: (artistId) => `lookup?id=${artistId}&entity=song&limit=25`,
-      transformResponse: (res) => ({
-        artist: res?.results?.[0] || null,
-        songs: normalizeList(res),
-      }),
+      transformResponse: (res, meta, artistId) => {
+        const rows = res?.results || [];
+        const artistRow = rows.find((r) => r.wrapperType === "artist");
+        const songs = normalizeLookup(res);
+        return {
+          // matches the shape DetailsHeader expects:
+          // artistData?.artists[artistId]?.attributes
+          artists: {
+            [artistId]: {
+              attributes: {
+                name: artistRow?.artistName || songs[0]?.subtitle || "",
+                // iTunes has no artist image, so borrow the first cover
+                artwork: { url: songs[0]?.images?.coverart || "" },
+                genreNames: [artistRow?.primaryGenreName || "Music"],
+              },
+            },
+          },
+          songs,
+        };
+      },
     }),
   }),
 });
