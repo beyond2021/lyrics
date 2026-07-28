@@ -2,12 +2,20 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "22"
+
+# Proxies /itunes/* to Apple, mirroring server.proxy in vite.config.js.
+# status = 200 makes this a rewrite, not a redirect, so the browser never
+# sees itunes.apple.com and never receives the musics:// scheme redirect.
 [[redirects]]
   from = "/itunes/*"
   to = "https://itunes.apple.com/:splat"
   status = 200
   force = true
 
+# SPA fallback - without this, a hard refresh on /top-charts returns 404.
+# Must come last: Netlify applies the first matching rule.
 [[redirects]]
   from = "/*"
   to = "/index.html"
